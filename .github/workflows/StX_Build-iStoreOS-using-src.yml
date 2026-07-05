@@ -244,6 +244,10 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    # 🔑 关键修复：显式授予写入 Release 的权限
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -276,16 +280,24 @@ jobs:
           kernel_repo: ophub/kernel
           kernel_usage: stable
           builder_name: kwonelee
+        # 注意：该动作可能将输出放在 ./out 或其他目录，我们通过后续查找动态获取
 
       - name: 📜 调整.img.gz 文件名
         id: rename
         run: |
-          for FILE in ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz; do
+          # 自动定位打包生成的 .img.gz 文件所在目录
+          OUTPUT_DIR=$(find . -type f -name "*.img.gz" -exec dirname {} \; | head -n1)
+          if [ -z "$OUTPUT_DIR" ]; then
+            echo "❌ 未找到任何 .img.gz 文件，打包可能失败"
+            exit 1
+          fi
+          echo "packaged_outputpath=$OUTPUT_DIR" >> $GITHUB_OUTPUT
+          for FILE in "$OUTPUT_DIR"/*.img.gz; do
             echo "Processing file: $FILE"
             FILENAME=$(basename "$FILE")
             NEW_FILENAME=$(echo "$FILENAME" | sed 's/openwrt/istoreos_${{ env.VERSION }}/g')
             if [ "$FILENAME" != "$NEW_FILENAME" ]; then
-              mv "$FILE" "${{ env.PACKAGED_OUTPUTPATH }}/$NEW_FILENAME"
+              mv "$FILE" "$OUTPUT_DIR/$NEW_FILENAME"
               echo "Renamed $FILENAME to $NEW_FILENAME"
             else
               echo "No need to rename $FILENAME"
@@ -311,6 +323,5 @@ jobs:
             
             🌐 IP： 单网口-动态获取（从上级路由找寻）；多网口-IP：192.168.100.1
           files: |
-            ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+            ${{ steps.rename.outputs.packaged_outputpath }}/*.img.gz
+        # ✅ 不再显式设置 GITHUB_TOKEN，默认使用 github.token（已通过 permissions 授权）
