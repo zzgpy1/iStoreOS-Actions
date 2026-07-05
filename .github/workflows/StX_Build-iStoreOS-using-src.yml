@@ -262,18 +262,19 @@ jobs:
           echo "✅ 下载完成，文件信息："
           ls -lh bin/targets/armsr/armv8/openwrt-armvirt-64-default-rootfs.tar.gz
 
-      # 额外诊断：解压并查看内容，确认 rootfs 是否有效
-      - name: 🔍 检查 rootfs 内容（解压后列出前10项）
+      - name: 🔍 检查 rootfs 内容（解压后列出前20项）
         run: |
-          mkdir -p rootfs-check
+          echo "=== 列出 rootfs 压缩包内文件列表（前20个） ==="
           tar -tzf bin/targets/armsr/armv8/openwrt-armvirt-64-default-rootfs.tar.gz | head -20
-          echo "如果输出为空或显示错误，说明下载的压缩包有问题。"
+          if [ $? -ne 0 ]; then
+            echo "❌ 压缩包损坏或无效，请检查下载链接。"
+            exit 1
+          fi
 
       - name: 🧱 打包iStoreOS固件（使用官方动作）
         id: package
         uses: ophub/amlogic-s9xxx-openwrt@main
         with:
-          # 使用绝对路径确保动作能找到文件
           openwrt_path: ${{ github.workspace }}/bin/targets/armsr/armv8/openwrt-armvirt-64-default-rootfs.tar.gz
           openwrt_board: ${{ inputs.openwrt_board }}
           openwrt_kernel: ${{ inputs.openwrt_kernel }}
@@ -281,31 +282,76 @@ jobs:
           kernel_repo: ophub/kernel
           kernel_usage: stable
           builder_name: kwonelee
+          # 显式指定输出目录，避免默认 out/ 可能被覆盖
+          openwrt_out: ./output
 
-      # 立即检查动作是否生成了输出目录
-      - name: 🔍 检查打包产物（动作执行后）
+      - name: 🔍 深度检查打包动作的输出
         id: check_output
         run: |
-          echo "=== 检查 out/ 目录 ==="
+          set -e
+          echo "=== 1. 检查指定的输出目录 ./output ==="
+          if [ -d "./output" ]; then
+            echo "output/ 存在，内容如下："
+            ls -la output/
+            echo "packaged=true" >> $GITHUB_OUTPUT
+          else
+            echo "output/ 不存在。"
+          fi
+
+          echo "=== 2. 检查默认 out/ 目录 ==="
           if [ -d "./out" ]; then
             echo "out/ 存在，内容如下："
             ls -la out/
             echo "packaged=true" >> $GITHUB_OUTPUT
           else
-            echo "❌ out/ 目录不存在，动作可能失败。"
-            echo "尝试查找所有 .img.gz 文件："
-            find . -type f -name "*.img.gz" || echo "无"
-            echo "列出动作可能的工作目录（ophub 动作）"
-            ls -la /home/runner/work/_actions/ophub/amlogic-s9xxx-openwrt/main/ || echo "路径不存在"
+            echo "out/ 不存在。"
+          fi
+
+          echo "=== 3. 全盘搜索 .img.gz 文件（当前工作区） ==="
+          find . -type f -name "*.img.gz" || echo "无"
+
+          echo "=== 4. 查看动作工作目录下的文件结构（受限） ==="
+          ACTION_DIR="/home/runner/work/_actions/ophub/amlogic-s9xxx-openwrt/main"
+          if [ -d "$ACTION_DIR" ]; then
+            echo "动作目录内容："
+            ls -la $ACTION_DIR
+            echo "=== 动作目录下的 openwrt/ 子目录（可能存放构建中间文件） ==="
+            ls -la $ACTION_DIR/openwrt/ || echo "openwrt/ 不存在"
+            echo "=== 动作目录下的 make-openwrt/ 子目录 ==="
+            ls -la $ACTION_DIR/make-openwrt/ || echo "make-openwrt/ 不存在"
+          fi
+
+          # 尝试读取动作日志（如果存在）
+          LOG_FILE="/home/runner/work/_actions/ophub/amlogic-s9xxx-openwrt/main/remake.log"
+          if [ -f "$LOG_FILE" ]; then
+            echo "=== 动作日志文件（最后50行） ==="
+            tail -50 "$LOG_FILE"
+          else
+            echo "未找到动作日志文件。"
+          fi
+
+          # 如果上述检查都未找到产物，则失败
+          if [ -d "./output" ] || [ -d "./out" ]; then
+            echo "packaged=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ 未找到任何输出目录，打包失败。请查看上方详细日志。"
             echo "packaged=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-      - name: 📜 调整.img.gz 文件名（仅在打包成功时执行）
+      - name: 📜 调整.img.gz 文件名（仅在打包成功时）
         if: steps.check_output.outputs.packaged == 'true'
         id: rename
         run: |
-          OUTPUT_DIR="./out"
+          # 优先使用 output/，否则使用 out/
+          if [ -d "./output" ]; then
+            OUTPUT_DIR="./output"
+          elif [ -d "./out" ]; then
+            OUTPUT_DIR="./out"
+          else
+            echo "没有输出目录，跳过重命名"
+            exit 1
+          fi
           echo "📁 找到文件目录：$OUTPUT_DIR"
           echo "packaged_outputpath=$OUTPUT_DIR" >> $GITHUB_OUTPUT
           for FILE in "$OUTPUT_DIR"/*.img.gz; do
