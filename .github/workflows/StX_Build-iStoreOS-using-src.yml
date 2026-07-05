@@ -10,9 +10,9 @@ on:
         default: "s905d_s905x3_s912_s922x-ct2000"
         type: choice
         options:
-          # 选项列表保持不变（省略以节省篇幅，请复制您原有的所有选项）
+          # 此处省略了所有选项以节省篇幅，请保留您原有的全部选项列表
           - a311d-oes_s922x-oes-plus_wxy-oect
-          # ... 全部选项
+          # ... 您的所有选项
       openwrt_kernel:
         description: "2、请选择内核版本"
         required: true
@@ -71,65 +71,47 @@ jobs:
           kernel_repo: ophub/kernel
           kernel_usage: stable
           builder_name: kwonelee
-          # 注意：此处不再使用 openwrt_out（无效参数）
 
-      - name: 🔍 深度诊断打包动作的执行结果
-        id: check_output
+      # ========== 新增步骤：从动作的工作目录中提取产物 ==========
+      - name: 📂 复制产物到当前工作区
+        id: copy_artifacts
         run: |
-          set -e
-          echo "=== 1. 检查默认输出目录 out/ ==="
-          if [ -d "./out" ]; then
-            echo "out/ 存在，内容如下："
-            ls -la out/
-            echo "packaged=true" >> $GITHUB_OUTPUT
-          else
-            echo "out/ 不存在。"
-          fi
-
-          echo "=== 2. 检查动作工作目录下的构建日志 ==="
+          # 动作的工作目录
           ACTION_DIR="/home/runner/work/_actions/ophub/amlogic-s9xxx-openwrt/main"
-          if [ -d "$ACTION_DIR/openwrt" ]; then
-            echo "openwrt/ 目录内容："
-            ls -la $ACTION_DIR/openwrt/
-            # 查找可能的日志文件
-            find $ACTION_DIR/openwrt -type f -name "*.log" | head -5 | while read LOG; do
-              echo "--- 日志文件: $LOG (最后50行) ---"
-              tail -50 "$LOG" || echo "无法读取"
-            done
-          fi
-
-          if [ -d "$ACTION_DIR/make-openwrt" ]; then
-            echo "make-openwrt/ 目录内容："
-            ls -la $ACTION_DIR/make-openwrt/
-          fi
-
-          echo "=== 3. 全盘搜索 .img.gz 文件（当前工作区） ==="
-          find . -type f -name "*.img.gz" || echo "无"
-
-          echo "=== 4. 检查是否有构建脚本的错误输出 ==="
-          # 动作可能在 remake 脚本中输出错误，尝试查看 remake 的日志
-          if [ -f "$ACTION_DIR/remake.log" ]; then
-            echo "=== remake.log 最后100行 ==="
-            tail -100 "$ACTION_DIR/remake.log"
+          # 产物所在路径（动作内部输出目录）
+          SOURCE_DIR="${ACTION_DIR}/openwrt/out"
+          
+          if [ -d "${SOURCE_DIR}" ]; then
+            echo "✅ 找到产物目录: ${SOURCE_DIR}"
+            ls -la "${SOURCE_DIR}"
+            # 创建当前工作区的输出目录
+            mkdir -p ./out
+            # 复制所有 .img.gz 文件到当前工作区的 out/
+            cp -v "${SOURCE_DIR}"/*.img.gz ./out/ || echo "没有 .img.gz 文件"
+            # 检查是否复制成功
+            if ls ./out/*.img.gz >/dev/null 2>&1; then
+              echo "packaged=true" >> $GITHUB_OUTPUT
+              echo "📦 已复制产物到 ./out/"
+            else
+              echo "❌ 未找到任何 .img.gz 文件，打包可能失败"
+              echo "packaged=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
           else
-            echo "无 remake.log"
-          fi
-
-          # 如果以上都未找到产物，则失败
-          if [ -d "./out" ]; then
-            echo "packaged=true" >> $GITHUB_OUTPUT
-          else
-            echo "❌ 未找到输出目录 out/，打包失败。请查看上方详细日志。"
+            echo "❌ 未找到产物目录 ${SOURCE_DIR}"
             echo "packaged=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-      - name: 📜 调整.img.gz 文件名（仅在打包成功时）
-        if: steps.check_output.outputs.packaged == 'true'
+      # 原 check_output 步骤已由上述替代，可删除或保留但跳过检查
+      # 为了简洁，直接在上一步完成判断
+
+      - name: 📜 调整.img.gz 文件名
+        if: steps.copy_artifacts.outputs.packaged == 'true'
         id: rename
         run: |
           OUTPUT_DIR="./out"
-          echo "📁 找到文件目录：$OUTPUT_DIR"
+          echo "📁 处理文件目录：$OUTPUT_DIR"
           echo "packaged_outputpath=$OUTPUT_DIR" >> $GITHUB_OUTPUT
           for FILE in "$OUTPUT_DIR"/*.img.gz; do
             [ -e "$FILE" ] || continue
@@ -139,8 +121,8 @@ jobs:
             echo "Renamed $FILENAME to $NEW_FILENAME"
           done
 
-      - name: 🚀 上传到 Release（仅在成功时）
-        if: steps.check_output.outputs.packaged == 'true'
+      - name: 🚀 上传到 Release
+        if: steps.copy_artifacts.outputs.packaged == 'true'
         uses: softprops/action-gh-release@v2.2.1
         with:
           tag_name: iStoreOS-${{ env.VERSION }}-SNAPSHOT-dhcp
